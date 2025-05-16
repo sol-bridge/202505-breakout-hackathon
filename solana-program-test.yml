@@ -1,0 +1,100 @@
+name: Solana Program Test
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'program/**'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'program/**'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust: [1.75.0]
+        solana: [1.16.0]
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: ${{ matrix.rust }}
+        override: true
+        profile: minimal
+        components: rustfmt, clippy
+    
+    - name: Cache Rust dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          program/target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+    
+    - name: Install Solana CLI
+      run: |
+        sh -c "$(curl -sSfL https://release.solana.com/v${{ matrix.solana }}/install)"
+        echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+        export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+        solana --version
+    
+    - name: Install BPF tools
+      run: |
+        cargo install --git https://github.com/solana-labs/cargo-build-bpf --locked
+    
+    - name: Run Cargo fmt
+      working-directory: ./program
+      run: cargo fmt -- --check
+    
+    - name: Run Cargo clippy
+      working-directory: ./program
+      run: cargo clippy -- -D warnings
+    
+    - name: Build Program
+      working-directory: ./program
+      run: |
+        cargo build-bpf
+        
+    - name: Run Unit Tests
+      working-directory: ./program
+      run: cargo test
+    
+    - name: Run BPF Tests
+      working-directory: ./program
+      run: cargo test-bpf
+    
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v3
+      if: success()
+      with:
+        name: program-build
+        path: program/target/deploy/*.so
+        retention-days: 7
+
+  security-audit:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        override: true
+    
+    - name: Install cargo-audit
+      run: cargo install cargo-audit
+    
+    - name: Security Audit
+      working-directory: ./program
+      run: cargo audit
